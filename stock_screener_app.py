@@ -38,13 +38,13 @@ st.sidebar.info("App auto-refreshes periodically for live data.")
 # Utility Functions
 # ---------------------------------------
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=86400)
 def get_sp500_tickers():
-    """Fetch the list of S&P 500 tickers from Wikipedia."""
-    url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-    tables = pd.read_html(url)
-    df = tables[0]
-    return df["Symbol"].to_list()
+    """Fetch static list of S&P 500 tickers from DataHub CSV (robust for cloud)."""
+    url = "https://datahub.io/core/s-and-p-500-companies/r/constituents.csv"
+    df = pd.read_csv(url)
+    return df['Symbol'].tolist()
+
 
 async def fetch_ticker_data(session, ticker):
     """Fetch live data for one ticker."""
