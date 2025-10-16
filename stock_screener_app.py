@@ -1,159 +1,129 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import numpy as np
 import datetime
-import time
 import requests
-from ta.volume import OnBalanceVolumeIndicator, AccDistIndexIndicator, MFIIndicator
-from ta.trend import EMAIndicator
-from ta.volatility import AverageTrueRange
-import asyncio
-import aiohttp
-import nest_asyncio
 import os
+import time
 
-# Enable nested event loops for async fetches
-nest_asyncio.apply()
+st.set_page_config(page_title="📈 High Demand Stock Screener", layout="wide")
 
-st.set_page_config(page_title="📈 Real-Time U.S. Stock Screener", layout="wide")
+st.title("📊 High Demand Stock Screener")
+st.markdown("""
+Filter U.S. stocks that meet the following criteria:
+- Volume spike ≥ 5× 20-day average volume
+- Price/demand increase ≥ 10% intraday
+- At least one news headline today
+- Float shares < 20 million
+""")
 
-# ---------------------------------------
-# Sidebar Filters
-# ---------------------------------------
-st.sidebar.title("🔍 Stock Screener Settings")
-st.sidebar.markdown("Filter U.S. stocks by price, RSI, volume, and more.")
-
-price_min = st.sidebar.number_input("Min Price ($)", 0.0, 1000.0, 5.0)
-price_max = st.sidebar.number_input("Max Price ($)", 0.0, 2000.0, 200.0)
-min_volume = st.sidebar.number_input("Min Average Volume", 0, 1_000_000_000, 500_000)
-rsi_max = st.sidebar.slider("Max RSI (Overbought Filter)", 0, 100, 70)
-rsi_min = st.sidebar.slider("Min RSI (Oversold Filter)", 0, 100, 30)
+# ----------------------------
+# Sidebar settings
+# ----------------------------
 refresh_minutes = st.sidebar.slider("⏱ Auto-refresh every (minutes)", 1, 15, 5)
-
-st.sidebar.markdown("---")
 st.sidebar.info("App auto-refreshes periodically for live data.")
 
-# ---------------------------------------
-# Utility Functions
-# ---------------------------------------
-
+# ----------------------------
+# Helper functions
+# ----------------------------
 @st.cache_data(ttl=86400)
 def get_sp500_tickers():
-    """Fetch static list of S&P 500 tickers from DataHub CSV (robust for cloud)."""
+    """Fetch S&P 500 tickers from static CSV"""
     url = "https://datahub.io/core/s-and-p-500-companies/r/constituents.csv"
     df = pd.read_csv(url)
     return df['Symbol'].tolist()
 
-
-async def fetch_ticker_data(session, ticker):
-    """Fetch live data for one ticker."""
-    try:
-        data = yf.download(ticker, period="1mo", interval="1d", progress=False)
-        if data.empty:
-            return None
-
-        data["RSI"] = ta_rsi(data["Close"], 14)
-        data["OBV"] = OnBalanceVolumeIndicator(data["Close"], data["Volume"]).on_balance_volume()
-        data["ADL"] = AccDistIndexIndicator(data["High"], data["Low"], data["Close"], data["Volume"]).acc_dist_index()
-        data["MFI"] = MFIIndicator(data["High"], data["Low"], data["Close"], data["Volume"]).money_flow_index()
-        data["VWAP"] = (data["Close"] * data["Volume"]).cumsum() / data["Volume"].cumsum()
-        data["Volume_Spike"] = data["Volume"] / data["Volume"].rolling(20).mean()
-
-        latest = data.iloc[-1]
-        return {
-            "Ticker": ticker,
-            "Price": latest["Close"],
-            "RSI": latest["RSI"],
-            "MFI": latest["MFI"],
-            "VWAP_Ratio": latest["Close"] / latest["VWAP"],
-            "OBV": latest["OBV"],
-            "Volume_Spike": latest["Volume_Spike"],
-            "AvgVolume": data["Volume"].mean()
-        }
-    except Exception:
-        return None
-
-def ta_rsi(series, period=14):
-    """Compute RSI indicator."""
-    delta = series.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(period).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
-
-async def fetch_all_data(tickers):
-    async with aiohttp.ClientSession() as session:
-        tasks = [fetch_ticker_data(session, t) for t in tickers]
-        results = await asyncio.gather(*tasks)
-    return [r for r in results if r]
-
-def get_news_for_ticker(ticker):
-    """Fetch recent news headlines for a given ticker using NewsAPI."""
+def get_news_today(ticker):
+    """Return list of news headlines published today"""
     api_key = os.environ.get("NEWS_API_KEY")
     if not api_key:
         return []
-    url = f"https://newsapi.org/v2/everything?q={ticker}&sortBy=publishedAt&apiKey={api_key}"
+    today = datetime.datetime.now().strftime("%Y-%m-%d")
+    url = f"https://newsapi.org/v2/everything?q={ticker}&from={today}&to={today}&sortBy=publishedAt&apiKey={api_key}"
     try:
-        response = requests.get(url, timeout=5)
-        articles = response.json().get("articles", [])
-        return [a["title"] for a in articles[:3]]
-    except Exception:
+        response = requests.get(url, timeout=5).json()
+        articles = response.get("articles", [])
+        return [a["title"] for a in articles]
+    except:
         return []
 
-# ---------------------------------------
-# Data Processing & Filtering
-# ---------------------------------------
-st.title("📊 Real-Time U.S. Stock Screener")
-st.caption("Featuring real-time volume indicators, technical filters, and news sentiment")
+def screen_stock(ticker):
+    try:
+        stock = yf.Ticker(ticker)
+        hist = stock.history(period="21d", interval="1d")
+        if hist.empty or len(hist) < 2:
+            return None
+        
+        # Volume spike
+        today_volume = hist['Volume'][-1]
+        avg_volume = hist['Volume'][:-1].mean()
+        if avg_volume == 0:
+            return None
+        volume_ratio = today_volume / avg_volume
+        
+        # Demand increase (intraday % change)
+        today_open = hist['Open'][-1]
+        today_close = hist['Close'][-1]
+        percent_increase = (today_close - today_open) / today_open * 100
+        
+        # Float shares
+        float_shares = stock.info.get("floatShares", 0)
+        
+        # News today
+        news_today = get_news_today(ticker)
+        
+        if (
+            volume_ratio >= 5
+            and percent_increase >= 10
+            and len(news_today) > 0
+            and float_shares is not None
+            and float_shares < 20_000_000
+        ):
+            return {
+                "Ticker": ticker,
+                "Price": today_close,
+                "Volume": today_volume,
+                "Volume/Avg": round(volume_ratio, 2),
+                "Demand%": round(percent_increase, 2),
+                "FloatShares": float_shares,
+                "News": news_today[:3]
+            }
+        return None
+    except:
+        return None
 
-with st.spinner("Fetching live market data..."):
-    tickers = get_sp500_tickers()
-    results = asyncio.run(fetch_all_data(tickers))
+# ----------------------------
+# Main logic
+# ----------------------------
+st.info("Scanning S&P 500 stocks... this may take a few minutes.")
+tickers = get_sp500_tickers()
+results = []
 
-df = pd.DataFrame(results)
-if df.empty:
-    st.error("No data retrieved. Try again later.")
-    st.stop()
+for t in tickers:
+    r = screen_stock(t)
+    if r:
+        results.append(r)
 
-# Apply filters
-filtered = df[
-    (df["Price"].between(price_min, price_max)) &
-    (df["AvgVolume"] > min_volume) &
-    (df["RSI"].between(rsi_min, rsi_max))
-]
+if results:
+    df = pd.DataFrame(results)
+    st.subheader(f"Stocks Matching Criteria ({len(df)})")
+    st.dataframe(df, use_container_width=True)
 
-# ---------------------------------------
-# Display Results
-# ---------------------------------------
-st.subheader(f"📈 Matching Stocks ({len(filtered)})")
-
-if len(filtered) > 0:
-    st.dataframe(
-        filtered.sort_values("Volume_Spike", ascending=False),
-        use_container_width=True,
-    )
-
-    # Display top 3 with news
-    st.subheader("📰 Top 3 Volume Movers + Latest News")
-    top3 = filtered.sort_values("Volume_Spike", ascending=False).head(3)
-    for _, row in top3.iterrows():
+    st.subheader("📰 News Headlines for Matching Stocks")
+    for _, row in df.iterrows():
         st.markdown(f"### {row['Ticker']} — ${row['Price']:.2f}")
-        headlines = get_news_for_ticker(row["Ticker"])
-        if headlines:
-            for h in headlines:
-                st.markdown(f"- {h}")
-        else:
-            st.markdown("_No recent news available._")
+        for headline in row['News']:
+            st.markdown(f"- {headline}")
         st.markdown("---")
 else:
-    st.warning("No stocks match your criteria.")
+    st.warning("No stocks match the criteria today.")
 
-# ---------------------------------------
-# Auto-refresh logic
-# ---------------------------------------
+# ----------------------------
+# Auto-refresh
+# ----------------------------
 st.sidebar.markdown("---")
 st.sidebar.caption(f"Last updated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 time.sleep(refresh_minutes * 60)
 st.experimental_rerun()
+
