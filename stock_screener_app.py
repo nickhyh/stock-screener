@@ -43,6 +43,56 @@ st_autorefresh(interval=refresh_minutes*60*1000, key="datarefresh")
 # ----------------------------
 # Load tickers from local CSVs
 # ----------------------------
+import pandas as pd
+import requests
+from io import StringIO
+import os
+
+# ---------------------------
+# Auto-update ticker CSVs
+# ---------------------------
+@st.cache_data(ttl=86400)  # cache for 1 day
+def update_ticker_csvs():
+    # ----- S&P 500 -----
+    try:
+        sp500_url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+        sp500_table = pd.read_html(sp500_url)[0]
+        sp500_table['Symbol'] = sp500_table['Symbol'].str.strip()
+        sp500_table.drop_duplicates(subset='Symbol', inplace=True)
+        sp500_table.to_csv("sp500.csv", index=False)
+        print(f"S&P 500 tickers updated: {len(sp500_table)}")
+    except Exception as e:
+        print("Failed to update S&P 500:", e)
+
+    # ----- NASDAQ -----
+    try:
+        nasdaq_url = "https://ftp.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt"
+        nasdaq_txt = requests.get(nasdaq_url).text
+        nasdaq_df = pd.read_csv(StringIO(nasdaq_txt), sep="|")
+        nasdaq_df = nasdaq_df[nasdaq_df['Test Issue'] == 'N']
+        nasdaq_df['Symbol'] = nasdaq_df['Symbol'].str.strip()
+        nasdaq_df.drop_duplicates(subset='Symbol', inplace=True)
+        nasdaq_df.to_csv("nasdaq.csv", index=False)
+        print(f"NASDAQ tickers updated: {len(nasdaq_df)}")
+    except Exception as e:
+        print("Failed to update NASDAQ:", e)
+
+    # ----- NYSE -----
+    try:
+        nyse_url = "https://ftp.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt"
+        nyse_txt = requests.get(nyse_url).text
+        nyse_df = pd.read_csv(StringIO(nyse_txt), sep="|")
+        nyse_df = nyse_df[nyse_df['Exchange'] == 'N']  # NYSE only
+        nyse_df['ACT Symbol'] = nyse_df['ACT Symbol'].str.strip()
+        nyse_df.drop_duplicates(subset='ACT Symbol', inplace=True)
+        nyse_df.to_csv("nyse.csv", index=False)
+        print(f"NYSE tickers updated: {len(nyse_df)}")
+    except Exception as e:
+        print("Failed to update NYSE:", e)
+
+# Run CSV update before loading tickers
+update_ticker_csvs()
+
 @st.cache_data(ttl=86400)
 def get_all_us_tickers():
     try:
