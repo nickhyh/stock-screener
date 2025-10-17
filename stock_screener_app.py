@@ -4,54 +4,21 @@ import yfinance as yf
 import asyncio
 import datetime
 import requests
+from io import StringIO
 import os
 from streamlit_autorefresh import st_autorefresh
 
 st.set_page_config(page_title="📈 Interactive Stock Screener", layout="wide")
-st.title("📊 Interactive High Demand Stock Screener — NASDAQ, NYSE & S&P 500")
-
+st.title("📊 High Demand Stock Screener — S&P500 + NASDAQ + NYSE")
 st.markdown("""
 Adjust the sliders in the sidebar to filter stocks dynamically.
-The stock must meet **all criteria ranges** to appear in results.
+Only stocks meeting **all criteria ranges** will appear.
 """)
 
 # ----------------------------
-# Sidebar sliders for criteria (ranges)
-# ----------------------------
-st.sidebar.header("Filter Settings")
-
-# Volume spike multiplier range
-vol_min, vol_max = st.sidebar.slider("Volume Spike (x) Range", 1, 20, (5, 20))
-
-# Intraday price increase (%) range
-demand_min, demand_max = st.sidebar.slider("Intraday Price Increase (%) Range", 1, 50, (10, 50))
-
-# Minimum news articles today (range)
-news_min, news_max = st.sidebar.slider("News Articles Today Range", 0, 5, (1, 5))
-
-# Maximum float (millions) range
-float_min, float_max = st.sidebar.slider("Float (Millions) Range", 1, 100, (1, 20))
-
-refresh_minutes = st.sidebar.slider("Auto-refresh every (minutes)", 1, 15, 5)
-st.sidebar.info("App auto-refreshes periodically.")
-
-# ----------------------------
-# Auto-refresh (non-blocking)
-# ----------------------------
-st_autorefresh(interval=refresh_minutes*60*1000, key="datarefresh")
-
-# ----------------------------
-# Load tickers from local CSVs
-# ----------------------------
-import pandas as pd
-import requests
-from io import StringIO
-import os
-
-# ---------------------------
 # Auto-update ticker CSVs
-# ---------------------------
-@st.cache_data(ttl=86400)  # cache for 1 day
+# ----------------------------
+@st.cache_data(ttl=86400)
 def update_ticker_csvs():
     # ----- S&P 500 -----
     try:
@@ -60,9 +27,8 @@ def update_ticker_csvs():
         sp500_table['Symbol'] = sp500_table['Symbol'].str.strip()
         sp500_table.drop_duplicates(subset='Symbol', inplace=True)
         sp500_table.to_csv("sp500.csv", index=False)
-        print(f"S&P 500 tickers updated: {len(sp500_table)}")
-    except Exception as e:
-        print("Failed to update S&P 500:", e)
+    except:
+        pass
 
     # ----- NASDAQ -----
     try:
@@ -73,42 +39,53 @@ def update_ticker_csvs():
         nasdaq_df['Symbol'] = nasdaq_df['Symbol'].str.strip()
         nasdaq_df.drop_duplicates(subset='Symbol', inplace=True)
         nasdaq_df.to_csv("nasdaq.csv", index=False)
-        print(f"NASDAQ tickers updated: {len(nasdaq_df)}")
-    except Exception as e:
-        print("Failed to update NASDAQ:", e)
+    except:
+        pass
 
     # ----- NYSE -----
     try:
         nyse_url = "https://ftp.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt"
         nyse_txt = requests.get(nyse_url).text
         nyse_df = pd.read_csv(StringIO(nyse_txt), sep="|")
-        nyse_df = nyse_df[nyse_df['Exchange'] == 'N']  # NYSE only
+        nyse_df = nyse_df[nyse_df['Exchange'] == 'N']
         nyse_df['ACT Symbol'] = nyse_df['ACT Symbol'].str.strip()
         nyse_df.drop_duplicates(subset='ACT Symbol', inplace=True)
         nyse_df.to_csv("nyse.csv", index=False)
-        print(f"NYSE tickers updated: {len(nyse_df)}")
-    except Exception as e:
-        print("Failed to update NYSE:", e)
+    except:
+        pass
 
-# Run CSV update before loading tickers
 update_ticker_csvs()
 
+# ----------------------------
+# Sidebar sliders for criteria
+# ----------------------------
+st.sidebar.header("Filter Settings")
+vol_min, vol_max = st.sidebar.slider("Volume Spike (x) Range", 1, 20, (5, 20))
+demand_min, demand_max = st.sidebar.slider("Intraday Price Increase (%) Range", 1, 50, (10, 50))
+news_min, news_max = st.sidebar.slider("News Articles Today Range", 0, 5, (1, 5))
+float_min, float_max = st.sidebar.slider("Float (Millions) Range", 1, 100, (1, 20))
+refresh_minutes = st.sidebar.slider("Auto-refresh (minutes)", 1, 15, 5)
+
+st_autorefresh(interval=refresh_minutes*60*1000, key="datarefresh")
+
+# ----------------------------
+# Load tickers
+# ----------------------------
 @st.cache_data(ttl=86400)
 def get_all_us_tickers():
-    try:
-        sp500_df = pd.read_csv("sp500.csv")
-        nasdaq_df = pd.read_csv("nasdaq.csv")
-        nyse_df = pd.read_csv("nyse.csv")
-    except Exception as e:
-        st.error(f"Error loading CSVs: {e}")
-        return []
+    sp500_df = pd.read_csv("sp500.csv")
+    nasdaq_df = pd.read_csv("nasdaq.csv")
+    nyse_df = pd.read_csv("nyse.csv")
 
     sp500_tickers = sp500_df['Symbol'].tolist()
     nasdaq_tickers = nasdaq_df['Symbol'].tolist()
     nyse_tickers = nyse_df['ACT Symbol'].tolist()
 
-    all_tickers = list(set(sp500_tickers + nasdaq_tickers + nyse_tickers))
-    return all_tickers
+    return list(set(sp500_tickers + nasdaq_tickers + nyse_tickers))
+
+tickers = get_all_us_tickers()
+if not tickers:
+    st.stop()
 
 # ----------------------------
 # Fetch news
@@ -132,25 +109,21 @@ def get_news_today(ticker):
 def screen_stock(ticker, vol_range, demand_range, news_range, float_range):
     try:
         stock = yf.Ticker(ticker)
-        hist = stock.history(period="1d", interval="1m")  # intraday 1-minute data
+        hist = stock.history(period="1d", interval="1m")
         if hist.empty or len(hist) < 2:
             return None
 
-        # Volume spike (last interval vs average so far)
         avg_volume_so_far = hist['Volume'][:-1].mean()
         current_interval_volume = hist['Volume'][-1]
         volume_ratio = current_interval_volume / (avg_volume_so_far if avg_volume_so_far else 1)
 
-        # Intraday price increase
         today_open = hist['Open'][0]
         today_close = hist['Close'][-1]
         percent_increase = (today_close - today_open) / today_open * 100
 
-        # Float and news
         float_shares = stock.info.get("floatShares", 0)
         news_today = get_news_today(ticker)
 
-        # Criteria: stock metrics must be within ranges
         if (
             vol_range[0] <= volume_ratio <= vol_range[1]
             and demand_range[0] <= percent_increase <= demand_range[1]
@@ -192,10 +165,6 @@ async def fetch_all_stocks_batched(tickers, vol_range, demand_range, news_range,
 # ----------------------------
 st.info("Scanning NASDAQ, NYSE & S&P 500 stocks. This may take a few minutes...")
 
-tickers = get_all_us_tickers()
-if not tickers:
-    st.stop()
-
 results = asyncio.run(
     fetch_all_stocks_batched(
         tickers,
@@ -216,7 +185,4 @@ if results:
         st.markdown(f"### {row['Ticker']} — ${row['Price']:.2f}")
         for headline in row['News']:
             st.markdown(f"- {headline}")
-        st.markdown("---")
-else:
-    st.warning("No stocks match the criteria today.")
-
+        st.mar
