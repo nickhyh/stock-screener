@@ -64,23 +64,26 @@ def get_news_today(ticker):
 def screen_stock(ticker):
     try:
         stock = yf.Ticker(ticker)
-        hist = stock.history(period="21d", interval="1d")
+        hist = stock.history(period="1d", interval="1m")  # intraday 1-minute data
         if hist.empty or len(hist) < 2:
             return None
-        
-        today_volume = hist['Volume'][-1]
-        avg_volume = hist['Volume'][:-1].mean()
-        if avg_volume == 0:
-            return None
-        volume_ratio = today_volume / avg_volume
-        
-        today_open = hist['Open'][-1]
+
+        # ----------------- Volume filter -----------------
+        cumulative_volume = hist['Volume'].sum()
+        avg_volume_so_far = hist['Volume'][:-1].mean()  # average of previous intervals
+        current_interval_volume = hist['Volume'][-1]
+        volume_ratio = current_interval_volume / (avg_volume_so_far if avg_volume_so_far else 1)
+
+        # ----------------- Price / Demand filter ------------
+        today_open = hist['Open'][0]
         today_close = hist['Close'][-1]
         percent_increase = (today_close - today_open) / today_open * 100
-        
+
+        # ----------------- Float & News -----------------
         float_shares = stock.info.get("floatShares", 0)
         news_today = get_news_today(ticker)
-        
+
+        # ----------------- Criteria -----------------
         if (
             volume_ratio >= 5
             and percent_increase >= 10
@@ -90,15 +93,16 @@ def screen_stock(ticker):
             return {
                 "Ticker": ticker,
                 "Price": today_close,
-                "Volume": today_volume,
-                "Volume/Avg": round(volume_ratio,2),
-                "Demand%": round(percent_increase,2),
+                "Volume": cumulative_volume,
+                "Volume/IntervalRatio": round(volume_ratio, 2),
+                "Demand%": round(percent_increase, 2),
                 "FloatShares": float_shares,
                 "News": news_today[:3]
             }
         return None
     except:
         return None
+
 
 # ----------------------------
 # Async batch fetching
