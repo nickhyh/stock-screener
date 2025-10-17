@@ -12,48 +12,40 @@ st.title("📈 Live Stock Screener (NASDAQ + NYSE + S&P 500)")
 # ------------------------------
 @st.cache_data
 def get_all_us_tickers():
+    import requests
+
     tickers = set()
 
-    def try_source(name, func):
-        try:
-            lst = func()
-            tickers.update(lst)
-            st.write(f"✅ Loaded {len(lst)} {name} tickers.")
-        except Exception as e:
-            st.warning(f"⚠️ Could not fetch {name}: {e}")
+    # --- NASDAQ + NYSE (Official source) ---
+    try:
+        url = "https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqtraded.txt"
+        res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"})
+        res.raise_for_status()
+        df = pd.read_csv(io.StringIO(res.text), sep="|")
+        symbols = df[df["Test Issue"] == "N"]["Symbol"].dropna().unique().tolist()
+        tickers.update(symbols)
+        st.write(f"✅ Loaded {len(symbols)} tickers from NASDAQ/NYSE feed.")
+    except Exception as e:
+        st.warning(f"⚠️ Could not fetch NASDAQ/NYSE: {e}")
 
-    # --- S&P 500 ---
-    try_source(
-        "S&P 500",
-        lambda: pd.read_html("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")[0]["Symbol"].tolist()
-    )
-
-    # --- NASDAQ ---
-    try_source(
-        "NASDAQ",
-        lambda: pd.read_csv(
-            "https://datahub.io/core/nasdaq-listings/r/nasdaq-listed-symbols.csv"
-        )["Symbol"].dropna().tolist()
-    )
-
-    # --- NYSE ---
-    try_source(
-        "NYSE",
-        lambda: pd.read_csv(
-            "https://datahub.io/core/nyse-other-listings/r/nyse-listed-symbols.csv"
-        )["ACT Symbol"].dropna().tolist()
-    )
+    # --- S&P 500 fallback (mirror) ---
+    try:
+        url = "https://datahub.io/core/s-and-p-500-companies/r/constituents.csv"
+        df = pd.read_csv(url)
+        tickers.update(df["Symbol"].dropna().tolist())
+        st.write(f"✅ Loaded {len(df)} S&P 500 tickers.")
+    except Exception as e:
+        st.warning(f"⚠️ Could not fetch S&P 500: {e}")
 
     if not tickers:
         st.error("❌ No remote tickers could be loaded. Using fallback list.")
-        fallback_csv = io.StringIO(
-            "AAPL\nMSFT\nGOOG\nAMZN\nTSLA\nNVDA\nMETA\nNFLX\nJPM\nDIS"
-        )
+        fallback_csv = io.StringIO("AAPL\nMSFT\nGOOG\nAMZN\nTSLA\nNVDA\nMETA\nNFLX\nJPM\nDIS")
         tickers = set(pd.read_csv(fallback_csv, header=None)[0].tolist())
 
     tickers = sorted(list(tickers))
     st.write(f"📊 Total tickers loaded: {len(tickers)}")
     return tickers
+
 
 
 tickers = get_all_us_tickers()
