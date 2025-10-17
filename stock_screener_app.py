@@ -2,9 +2,10 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 import asyncio
-import requests
 import datetime
+import requests
 import os
+from streamlit_autorefresh import st_autorefresh
 
 st.set_page_config(page_title="📈 High Demand Stock Screener", layout="wide")
 st.title("📊 High Demand Stock Screener — NASDAQ, NYSE & S&P 500")
@@ -21,24 +22,28 @@ refresh_minutes = st.sidebar.slider("⏱ Auto-refresh every (minutes)", 1, 15, 5
 st.sidebar.info("App auto-refreshes periodically.")
 
 # ----------------------------
-# Fetch tickers
+# Auto-refresh (non-blocking)
+# ----------------------------
+st_autorefresh(interval=refresh_minutes*60*1000, key="datarefresh")
+
+# ----------------------------
+# Load tickers from local CSVs
 # ----------------------------
 @st.cache_data(ttl=86400)
 def get_all_us_tickers():
     sp500_df = pd.read_csv("sp500.csv")
     nasdaq_df = pd.read_csv("nasdaq.csv")
     nyse_df = pd.read_csv("nyse.csv")
-    
+
     sp500_tickers = sp500_df['Symbol'].tolist()
     nasdaq_tickers = nasdaq_df['Symbol'].tolist()
     nyse_tickers = nyse_df['ACT Symbol'].tolist()
-    
+
     all_tickers = list(set(sp500_tickers + nasdaq_tickers + nyse_tickers))
     return all_tickers
 
-
 # ----------------------------
-# News fetch
+# Fetch news
 # ----------------------------
 def get_news_today(ticker):
     api_key = os.environ.get("NEWS_API_KEY")
@@ -96,6 +101,41 @@ def screen_stock(ticker):
         return None
 
 # ----------------------------
-# Async fetching
-# ---
+# Async batch fetching
+# ----------------------------
+async def fetch_all_stocks_batched(tickers, batch_size=50):
+    loop = asyncio.get_event_loop()
+    results = []
+    progress = st.progress(0)
+    total_batches = (len(tickers) + batch_size - 1) // batch_size
+
+    for i, batch_start in enumerate(range(0, len(tickers), batch_size)):
+        batch = tickers[batch_start:batch_start+batch_size]
+        tasks = [loop.run_in_executor(None, screen_stock, t) for t in batch]
+        batch_results = await asyncio.gather(*tasks)
+        results.extend([r for r in batch_results if r])
+        progress.progress((i+1)/total_batches)
+    return results
+
+# ----------------------------
+# Main logic
+# ----------------------------
+st.info("Scanning NASDAQ, NYSE & S&P 500 stocks. This may take a few minutes...")
+
+tickers = get_all_us_tickers()
+results = asyncio.run(fetch_all_stocks_batched(tickers, batch_size=50))
+
+if results:
+    df = pd.DataFrame(results)
+    st.subheader(f"Stocks Matching Criteria ({len(df)})")
+    st.dataframe(df, use_container_width=True)
+
+    st.subheader("📰 News Headlines")
+    for _, row in df.iterrows():
+        st.markdown(f"### {row['Ticker']} — ${row['Price']:.2f}")
+        for headline in row['News']:
+            st.markdown(f"- {headline}")
+        st.markdown("---")
+else:
+    st.warning("No stocks match the criteria today.")
 
