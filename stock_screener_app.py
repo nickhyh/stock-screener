@@ -176,13 +176,8 @@ results = asyncio.run(
 )
 
 if results:
-    df = pd.DataFrame(results)
-    st.subheader(f"Stocks Matching Criteria ({len(df)})")
-    st.dataframe(df, use_container_width=True)
-
-    st.subheader("📰 News Headlines")
-    for _, row in df.iterrows():
-        st.markdown(f"### {row['Ticker']} — ${row['Price']:.2f}")
-        for headline in row['News']:
-            st.markdown(f"- {headline}")
-        st.mar
+    tickers_only = [r["Ticker"] for r in results]
+    st.subheader(f"Stocks Matching Criteria ({len(tickers_only)})")
+    st.write(", ".join(tickers_only))
+else:
+    st.warning("No stocks match the criteria today.")
