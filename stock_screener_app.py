@@ -1,22 +1,23 @@
 import streamlit as st
 import pandas as pd
 import yfinance as yf
-import aiohttp
 import asyncio
+import aiohttp
 import io
+import requests
+import time
 
-st.title("📈 Live Stock Screener (NASDAQ + NYSE + S&P 500)")
+st.set_page_config(page_title="Live Stock Screener", layout="wide")
+st.title("📈 Live Stock Screener — NASDAQ + NYSE + S&P 500")
 
-# ------------------------------
-# SAFE TICKER FETCHING
-# ------------------------------
+# -----------------------------------------------------------
+# FETCH ALL U.S. TICKERS (robust + cached)
+# -----------------------------------------------------------
 @st.cache_data
 def get_all_us_tickers():
-    import requests
-
     tickers = set()
 
-    # --- NASDAQ + NYSE (Official source) ---
+    # --- NASDAQ/NYSE/AMEX (official file) ---
     try:
         url = "https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqtraded.txt"
         res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"})
@@ -24,11 +25,11 @@ def get_all_us_tickers():
         df = pd.read_csv(io.StringIO(res.text), sep="|")
         symbols = df[df["Test Issue"] == "N"]["Symbol"].dropna().unique().tolist()
         tickers.update(symbols)
-        st.write(f"✅ Loaded {len(symbols)} tickers from NASDAQ/NYSE feed.")
+        st.write(f"✅ Loaded {len(symbols)} NASDAQ/NYSE tickers.")
     except Exception as e:
         st.warning(f"⚠️ Could not fetch NASDAQ/NYSE: {e}")
 
-    # --- S&P 500 fallback (mirror) ---
+    # --- S&P 500 (mirror) ---
     try:
         url = "https://datahub.io/core/s-and-p-500-companies/r/constituents.csv"
         df = pd.read_csv(url)
@@ -38,31 +39,32 @@ def get_all_us_tickers():
         st.warning(f"⚠️ Could not fetch S&P 500: {e}")
 
     if not tickers:
-        st.error("❌ No remote tickers could be loaded. Using fallback list.")
-        fallback_csv = io.StringIO("AAPL\nMSFT\nGOOG\nAMZN\nTSLA\nNVDA\nMETA\nNFLX\nJPM\nDIS")
-        tickers = set(pd.read_csv(fallback_csv, header=None)[0].tolist())
+        st.error("❌ No remote tickers could be loaded — using fallback.")
+        fallback = io.StringIO("AAPL\nMSFT\nGOOG\nAMZN\nTSLA\nNVDA\nMETA\nNFLX\nJPM\nDIS")
+        tickers = set(pd.read_csv(fallback, header=None)[0].tolist())
 
     tickers = sorted(list(tickers))
     st.write(f"📊 Total tickers loaded: {len(tickers)}")
     return tickers
 
 
-
 tickers = get_all_us_tickers()
 
-# ------------------------------
-# SLIDERS
-# ------------------------------
-st.sidebar.header("Filter Settings")
+# -----------------------------------------------------------
+# SIDEBAR FILTERS (SLIDERS)
+# -----------------------------------------------------------
+st.sidebar.header("🔧 Screening Criteria (Minimum Thresholds)")
 
 min_price = st.sidebar.slider("Minimum Current Price ($)", 0, 500, 5)
 min_change = st.sidebar.slider("Minimum % Price Change Today", -5, 20, 5)
 min_volume = st.sidebar.slider("Minimum Volume (Shares)", 0, 10_000_000, 500_000)
-min_rel_volume = st.sidebar.slider("Min Volume Multiplier vs Intraday Avg", 1.0, 10.0, 5.0)
+min_rel_volume = st.sidebar.slider("Min Volume × vs Intraday Avg", 1.0, 10.0, 5.0)
 
-# ------------------------------
-# ASYNC DATA FETCH
-# ------------------------------
+auto_refresh = st.sidebar.checkbox("Auto-refresh every 60 seconds", value=False)
+
+# -----------------------------------------------------------
+# ASYNC DATA FETCHING
+# -----------------------------------------------------------
 async def fetch_data(ticker):
     try:
         data = yf.download(ticker, period="2d", interval="1h", progress=False)
@@ -72,18 +74,20 @@ async def fetch_data(ticker):
     except Exception:
         return None
 
+
 async def fetch_all(tickers):
     results = []
-    tasks = [fetch_data(t) for t in tickers[:300]]  # limit to 300 for speed
+    tasks = [fetch_data(t) for t in tickers[:300]]  # limit for efficiency
     for coro in asyncio.as_completed(tasks):
         result = await coro
         if result:
             results.append(result)
     return results
 
-# ------------------------------
-# SCREEN FUNCTION
-# ------------------------------
+
+# -----------------------------------------------------------
+# SCREEN LOGIC
+# -----------------------------------------------------------
 def screen_stocks(tickers):
     found = []
     results = asyncio.run(fetch_all(tickers))
@@ -96,7 +100,6 @@ def screen_stocks(tickers):
         price = current["Close"]
         change_pct = ((price - prev["Close"]) / prev["Close"]) * 100
         volume = current["Volume"]
-
         intraday_avg_vol = data["Volume"].mean()
         rel_vol = volume / intraday_avg_vol if intraday_avg_vol > 0 else 0
 
@@ -111,14 +114,24 @@ def screen_stocks(tickers):
     st.write(f"✅ Found {len(found)} matching stocks.")
     return found
 
-# ------------------------------
-# RUN
-# ------------------------------
-if st.button("Run Screener"):
+
+# -----------------------------------------------------------
+# RUN & REFRESH LOOP
+# -----------------------------------------------------------
+def run_screener():
     matches = screen_stocks(tickers)
     if matches:
-        st.success("Stocks meeting criteria:")
+        st.success("📊 Stocks meeting criteria:")
         st.write(matches)
     else:
         st.warning("No stocks currently match your criteria.")
+
+
+if auto_refresh:
+    while True:
+        st.experimental_rerun()
+        time.sleep(60)
+else:
+    if st.button("Run Screener Now"):
+        run_screener()
 
