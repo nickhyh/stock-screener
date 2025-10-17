@@ -7,18 +7,23 @@ import requests
 import os
 from streamlit_autorefresh import st_autorefresh
 
-st.set_page_config(page_title="📈 High Demand Stock Screener", layout="wide")
-st.title("📊 High Demand Stock Screener — NASDAQ, NYSE & S&P 500")
+st.set_page_config(page_title="📈 Interactive Stock Screener", layout="wide")
+st.title("📊 Interactive High Demand Stock Screener — NASDAQ, NYSE & S&P 500")
 
 st.markdown("""
-Filters for stocks with:
-- Volume spike ≥ 5× 20-day avg
-- Intraday demand increase ≥ 10%
-- At least one news event today
-- Float < 20M shares
+Adjust the sliders in the sidebar to filter stocks dynamically:
 """)
 
-refresh_minutes = st.sidebar.slider("⏱ Auto-refresh every (minutes)", 1, 15, 5)
+# ----------------------------
+# Sidebar sliders for criteria
+# ----------------------------
+st.sidebar.header("Filter Settings")
+volume_multiplier = st.sidebar.slider("Volume Spike (x)", 1, 20, 5)
+demand_percent = st.sidebar.slider("Intraday Price Increase (%)", 1, 50, 10)
+min_news = st.sidebar.slider("Minimum News Articles Today", 0, 5, 1)
+max_float = st.sidebar.slider("Maximum Float (Millions)", 1, 100, 20)
+
+refresh_minutes = st.sidebar.slider("Auto-refresh every (minutes)", 1, 15, 5)
 st.sidebar.info("App auto-refreshes periodically.")
 
 # ----------------------------
@@ -61,7 +66,7 @@ def get_news_today(ticker):
 # ----------------------------
 # Screening function
 # ----------------------------
-def screen_stock(ticker):
+def screen_stock(ticker, vol_mult, demand_pct, min_news_count, max_float_val):
     try:
         stock = yf.Ticker(ticker)
         hist = stock.history(period="1d", interval="1m")  # intraday 1-minute data
@@ -69,7 +74,6 @@ def screen_stock(ticker):
             return None
 
         # ----------------- Volume filter -----------------
-        cumulative_volume = hist['Volume'].sum()
         avg_volume_so_far = hist['Volume'][:-1].mean()  # average of previous intervals
         current_interval_volume = hist['Volume'][-1]
         volume_ratio = current_interval_volume / (avg_volume_so_far if avg_volume_so_far else 1)
@@ -85,15 +89,15 @@ def screen_stock(ticker):
 
         # ----------------- Criteria -----------------
         if (
-            volume_ratio >= 5
-            and percent_increase >= 10
-            and float_shares and float_shares < 20_000_000
-            and news_today
+            volume_ratio >= vol_mult
+            and percent_increase >= demand_pct
+            and float_shares and float_shares < max_float_val*1_000_000
+            and len(news_today) >= min_news_count
         ):
             return {
                 "Ticker": ticker,
                 "Price": today_close,
-                "Volume": cumulative_volume,
+                "Volume": hist['Volume'].sum(),
                 "Volume/IntervalRatio": round(volume_ratio, 2),
                 "Demand%": round(percent_increase, 2),
                 "FloatShares": float_shares,
@@ -103,11 +107,10 @@ def screen_stock(ticker):
     except:
         return None
 
-
 # ----------------------------
 # Async batch fetching
 # ----------------------------
-async def fetch_all_stocks_batched(tickers, batch_size=50):
+async def fetch_all_stocks_batched(tickers, vol_mult, demand_pct, min_news_count, max_float_val, batch_size=50):
     loop = asyncio.get_event_loop()
     results = []
     progress = st.progress(0)
@@ -115,7 +118,7 @@ async def fetch_all_stocks_batched(tickers, batch_size=50):
 
     for i, batch_start in enumerate(range(0, len(tickers), batch_size)):
         batch = tickers[batch_start:batch_start+batch_size]
-        tasks = [loop.run_in_executor(None, screen_stock, t) for t in batch]
+        tasks = [loop.run_in_executor(None, screen_stock, t, vol_mult, demand_pct, min_news_count, max_float_val) for t in batch]
         batch_results = await asyncio.gather(*tasks)
         results.extend([r for r in batch_results if r])
         progress.progress((i+1)/total_batches)
@@ -127,7 +130,7 @@ async def fetch_all_stocks_batched(tickers, batch_size=50):
 st.info("Scanning NASDAQ, NYSE & S&P 500 stocks. This may take a few minutes...")
 
 tickers = get_all_us_tickers()
-results = asyncio.run(fetch_all_stocks_batched(tickers, batch_size=50))
+results = asyncio.run(fetch_all_stocks_batched(tickers, volume_multiplier, demand_percent, min_news, max_float))
 
 if results:
     df = pd.DataFrame(results)
@@ -142,4 +145,3 @@ if results:
         st.markdown("---")
 else:
     st.warning("No stocks match the criteria today.")
-
