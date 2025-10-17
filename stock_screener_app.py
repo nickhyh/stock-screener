@@ -25,23 +25,17 @@ st.sidebar.info("App auto-refreshes periodically.")
 # ----------------------------
 @st.cache_data(ttl=86400)
 def get_all_us_tickers():
-    # S&P 500
-    sp500_url = "https://datahub.io/core/s-and-p-500-companies/r/constituents.csv"
-    sp500_df = pd.read_csv(sp500_url)
+    sp500_df = pd.read_csv("sp500.csv")
+    nasdaq_df = pd.read_csv("nasdaq.csv")
+    nyse_df = pd.read_csv("nyse.csv")
+    
     sp500_tickers = sp500_df['Symbol'].tolist()
-    
-    # NASDAQ
-    nasdaq_url = "https://datahub.io/core/nasdaq-listings/r/nasdaq-listed-symbols.csv"
-    nasdaq_df = pd.read_csv(nasdaq_url)
     nasdaq_tickers = nasdaq_df['Symbol'].tolist()
-    
-    # NYSE
-    nyse_url = "https://datahub.io/core/nyse-other-listings/r/other-listed.csv"
-    nyse_df = pd.read_csv(nyse_url)
     nyse_tickers = nyse_df['ACT Symbol'].tolist()
     
     all_tickers = list(set(sp500_tickers + nasdaq_tickers + nyse_tickers))
     return all_tickers
+
 
 # ----------------------------
 # News fetch
