@@ -58,5 +58,55 @@ min_rel_volume = st.sidebar.slider("Min Volume Multiplier vs Intraday Avg", 1.0,
 # ------------------------------
 async def fetch_data(session, ticker):
     try:
-        data =
+        data = yf.download(ticker, period="2d", interval="1h", progress=False)
+        if len(data) < 2:
+            return None
+        return ticker, data
+    except Exception:
+        return None
 
+async def fetch_all(tickers):
+    async with aiohttp.ClientSession():
+        tasks = [asyncio.to_thread(fetch_data, None, t) for t in tickers[:300]]
+        results = await asyncio.gather(*tasks)
+    return [r for r in results if r is not None]
+
+# ------------------------------
+# Screening function
+# ------------------------------
+def screen_stocks(tickers):
+    found = []
+    results = asyncio.run(fetch_all(tickers))
+    st.write(f"🔍 Checked {len(results)} tickers.")
+
+    for result in results:
+        ticker, data = result
+        current = data.iloc[-1]
+        prev = data.iloc[-2]
+
+        price = current["Close"]
+        change_pct = ((price - prev["Close"]) / prev["Close"]) * 100
+        volume = current["Volume"]
+
+        intraday_avg_vol = data["Volume"].mean()
+        rel_vol = volume / intraday_avg_vol if intraday_avg_vol > 0 else 0
+
+        if (
+            price >= min_price
+            and change_pct >= min_change
+            and volume >= min_volume
+            and rel_vol >= min_rel_volume
+        ):
+            found.append(ticker)
+
+    st.write(f"✅ Found {len(found)} matching stocks.")
+    return found
+
+
+if st.button("Run Screener"):
+    matches = screen_stocks(tickers)
+    if matches:
+        st.success("Stocks meeting criteria:")
+        st.write(matches)
+    else:
+        st.warning("No stocks currently match your criteria.")
